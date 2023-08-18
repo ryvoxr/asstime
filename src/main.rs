@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     app.load_times()?;
 
     for time in &app.times {
-        time.print_duration()?;
+        println!("{}", time);
     }
 
     app.write_times()?;
