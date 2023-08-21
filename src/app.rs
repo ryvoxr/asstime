@@ -1,120 +1,262 @@
-use chrono;
+use crate::time::{Class, Time, CLASS_NUM};
+use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json;
-use std::error::Error;
-use std::fs;
-use std::io;
-use std::path::Path;
-use std::time::SystemTime;
+use std::{
+    collections::HashMap,
+    env,
+    error::Error,
+    fs,
+    io,
+    path::Path,
+};
 
-pub struct App<'a> {
+pub fn run(args: Cli) -> Result<(), Box<dyn Error>> {
+    let pathstr = env::var("HOME")? + "/.local/share/asstime/times.json";
+    let path = Path::new(&pathstr);
+    let mut app = App::new(path);
+    app.load_data()?;
+
+    match args.command {
+        Some(Commands::Start { class }) => {
+            app.start_timer(class.into())?;
+        }
+        Some(Commands::Stop { class }) => {
+            app.end_timer(class.into())?;
+        }
+        Some(Commands::Cancel { class }) => {
+            app.cancel_timer(class.into())?;
+        }
+        Some(Commands::Show(args)) => app.show(args),
+        None => {
+            if args.list_classes {
+                app.list_class();
+            } else {
+                println!("No command given");
+            }
+        }
+    };
+
+    // App cleanup
+    app.write_data()?;
+    Ok(())
+}
+
+struct App<'a> {
     path: &'a Path,
-    pub times: Vec<Time>,
+    data: Data,
 }
 
 impl<'a> App<'a> {
-    pub fn new(path: &'a Path) -> Self {
+    fn new(path: &'a Path) -> Self {
         App {
             path,
-            times: Vec::new(),
+            data: Data::new(),
         }
     }
 
-    pub fn load_times(&mut self) -> io::Result<()> {
-        // create full path if does not exist
+    fn start_timer(&mut self, class: Class) -> Result<(), Box<dyn Error>> {
+        if self.data.active_times.get(&class).is_some() {
+            return Err(Box::new(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "timer already exists",
+            )));
+        }
+        let mut time = Time::new(class);
+        time.set_start();
+        self.data.active_times.insert(class, time);
+        println!("Timer started for {}", class);
+        Ok(())
+    }
+
+    fn end_timer(&mut self, class: Class) -> Result<(), Box<dyn Error>> {
+        match self.data.active_times.get_mut(&class) {
+            Some(time) => {
+                time.set_end();
+                println!("Timer stopped for {} with time {}", class, time);
+                self.data.times.push(time.clone());
+                self.data.active_times.remove(&class);
+            }
+            None => {
+                return Err(Box::new(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "timer not found",
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn cancel_timer(&mut self, class: Class) -> Result<(), Box<dyn Error>> {
+        match self.data.active_times.get_mut(&class) {
+            Some(_) => {
+                self.data.active_times.remove(&class);
+            }
+            None => {
+                return Err(Box::new(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "timer not found",
+                )));
+            }
+        }
+        println!("Timer canceled for {}", class);
+        Ok(())
+    }
+
+    fn show(&self, args: ShowArgs) {
+        match &args.class {
+            Some(c) => {
+                self.show_timer(c.to_string().into(), &args);
+            }
+            None => {
+                self.show_timers(args.active_only);
+            }
+        }
+    }
+
+    fn show_timer(&self, class: Class, args: &ShowArgs) {
+        let n = match args.previous {
+            Some(n) => n + 1,
+            None => 1,
+        };
+        let mut found = 0;
+        match self.data.active_times.get(&class) {
+            Some(time) => {
+                println!("{}: {} (active)", class, time);
+                found += 1;
+            }
+            None => (),
+        };
+        if args.active_only {
+            println!("No timer found for {}", class);
+            return;
+        }
+        for time in self.data.times.iter().rev() {
+            if n - found <= 0 {
+                return;
+            }
+            if time.class == class {
+                println!("{}: {}", class, time);
+                found += 1;
+            }
+        }
+        if found == 0 {
+            println!("No timer found for {}", class);
+        }
+    }
+
+    fn show_timers(&self, active_only: bool) {
+        let mut shown_classes: Vec<Class> = Vec::new();
+        for (class, time) in &self.data.active_times {
+            println!("{}: {} (active)", class, time);
+            shown_classes.push(*class);
+        }
+        if active_only {
+            return;
+        }
+        for time in self.data.times.iter().rev() {
+            if shown_classes.len() >= CLASS_NUM {
+                break;
+            }
+            if !shown_classes.contains(&time.class) {
+                println!("{}: {}", time.class, time);
+                shown_classes.push(time.class);
+            }
+        }
+    }
+
+    fn create_path_if_not_exists(&self) -> io::Result<()> {
         if !self.path.exists() {
             fs::create_dir_all(self.path.parent().ok_or(io::Error::new(
                 io::ErrorKind::NotFound,
                 "couldn't find parent directory",
             ))?)?;
         }
-        match fs::File::open(&self.path) {
-            Err(_) => _ = fs::File::create(&self.path)?,
+        match fs::File::open(self.path) {
+            Err(_) => _ = fs::File::create(self.path)?,
             Ok(_) => (),
-        };
-
-        self.times = match serde_json::from_str(&fs::read_to_string(self.path)?) {
-            Ok(v) => v,
-            Err(_) => Vec::new(),
         };
         Ok(())
     }
 
-    pub fn write_times(&self) -> Result<(), Box<dyn Error>> {
-        let serialized = serde_json::to_string(&self.times)?;
+    fn load_data(&mut self) -> io::Result<()> {
+        self.create_path_if_not_exists()?;
+
+        self.data = match serde_json::from_str(&fs::read_to_string(self.path)?) {
+            Ok(v) => v,
+            Err(_) => Data::new(),
+        };
+        Ok(())
+    }
+
+    fn write_data(&self) -> Result<(), Box<dyn Error>> {
+        let serialized = serde_json::to_string(&self.data)?;
         fs::write(self.path, serialized)?;
         Ok(())
     }
-}
 
-#[derive(Serialize, Deserialize, Debug)]
-pub enum Class {
-    Health,
-    Physics,
-    Econ,
-    Stats,
-    Calc,
-    Chem,
-    English,
-    Other,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Time {
-    start: Option<SystemTime>,
-    end: Option<SystemTime>,
-    class: Class,
-}
-
-impl Time {
-    pub fn new(class: Class) -> Self {
-        Time {
-            start: None,
-            end: None,
-            class,
+    fn list_class(&self) {
+        for class in &[
+            Class::Health,
+            Class::Physics,
+            Class::Econ,
+            Class::Stats,
+            Class::Calc,
+            Class::Chem,
+            Class::English,
+        ] {
+            println!("{}", class);
         }
     }
+}
 
-    pub fn set_start(&mut self) {
-        self.start = Some(SystemTime::now());
-    }
+#[derive(Serialize, Deserialize)]
+struct Data {
+    times: Vec<Time>,
+    active_times: HashMap<Class, Time>,
+}
 
-    pub fn set_end(&mut self) {
-        self.end = Some(SystemTime::now());
+impl Data {
+    fn new() -> Self {
+        Data {
+            times: Vec::new(),
+            active_times: HashMap::new(),
+        }
     }
 }
 
-impl std::fmt::Display for Time {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.start {
-            Some(s) => match self.end {
-                Some(e) => match e.duration_since(s) {
-                    Ok(d) => {
-                        let duration = chrono::Duration::from_std(d)
-                            .expect("couldn't convert std::time::Duration to chrono::Duration");
-                        if duration.num_hours() > 0 {
-                            write!(
-                                f,
-                                "{}h {}m {}s",
-                                duration.num_hours(),
-                                duration.num_minutes() % 60,
-                                duration.num_seconds() % 60
-                            )?;
-                        } else {
-                            write!(
-                                f,
-                                "{}m {}s",
-                                duration.num_minutes(),
-                                duration.num_seconds() % 60
-                            )?;
-                        }
-                    }
-                    Err(_) => (),
-                },
-                None => (),
-            },
-            None => (),
-        };
-        Ok(())
-    }
+#[derive(Parser)]
+#[clap(author, version, about)]
+pub struct Cli {
+    #[clap(subcommand)]
+    command: Option<Commands>,
+
+    /// List valid classes
+    #[arg(long)]
+    list_classes: bool,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Start an assignment timer
+    Start { class: String },
+    /// Stop an assignment timer
+    Stop { class: String },
+    /// Cancel an assignment timer
+    Cancel { class: String },
+    /// Show assignment times
+    Show(ShowArgs),
+}
+
+#[derive(Args)]
+struct ShowArgs {
+    /// Show assignment times
+    #[arg(short, long)]
+    class: Option<String>,
+    /// Only show active times
+    #[arg(short, long)]
+    active_only: bool,
+    /// Show N previous classes when class specified
+    #[arg(short, long, value_name = "N")]
+    previous: Option<i32>,
 }

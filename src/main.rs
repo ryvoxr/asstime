@@ -1,20 +1,15 @@
-use std::error::Error;
-use std::path::Path;
-use std::env;
+use std::process;
+use clap::Parser;
 
 mod app;
-use app::*;
+mod time;
+use app::Cli;
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let pathstr = env::var("HOME")? + "/.local/share/asstime/times.json";
-    let path = Path::new(&pathstr);
-    let mut app = App::new(path);
-    app.load_times()?;
-
-    for time in &app.times {
-        println!("{}", time);
+fn main() {
+    let args = Cli::parse();
+    
+    if let Err(e) = app::run(args) {
+        eprintln!("Application error: {}", e);
+        process::exit(1);
     }
-
-    app.write_times()?;
-    Ok(())
 }
