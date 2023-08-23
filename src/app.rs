@@ -153,6 +153,9 @@ impl<'a> App<'a> {
             if shown_classes.len() >= CLASS_NUM {
                 break;
             }
+            if time.class == Class::Other {
+                continue;
+            }
             if !shown_classes.contains(&time.class) {
                 println!("{}: {}", time.class, time);
                 shown_classes.push(time.class);
@@ -219,6 +222,9 @@ impl<'a> App<'a> {
         for time in self.data.times.iter().rev() {
             if used_classes.len() >= CLASS_NUM {
                 break;
+            }
+            if time.class == Class::Other {
+                continue;
             }
             if !used_classes.contains(&time.class) {
                 used_classes.push(time.class);
