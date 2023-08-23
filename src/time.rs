@@ -1,4 +1,6 @@
 use std::time::SystemTime;
+use std::error::Error;
+use std::fmt;
 use serde::{Deserialize, Serialize};
 
 pub const CLASS_NUM: usize = 7;
@@ -68,37 +70,43 @@ impl Time {
     pub fn set_end(&mut self) {
         self.end = Some(SystemTime::now());
     }
-}
 
-impl std::fmt::Display for Time {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    pub fn duration(&self) -> Result<chrono::Duration, Box<dyn Error>> {
         match self.start {
             Some(s) => {
                 let duration_std = match self.end {
-                    Some(e) => e.duration_since(s).expect("couldn't get duration since start"),
-                    None => s.elapsed().expect("couldn't get elapsed time"),
+                    Some(e) => e.duration_since(s)?,
+                    None => s.elapsed()?,
                 };
-                let duration = chrono::Duration::from_std(duration_std)
-                    .expect("couldn't convert std::time::Duration to chrono::Duration");
-                if duration.num_hours() > 0 {
-                    write!(
-                        f,
-                        "{}h {}m {}s",
-                        duration.num_hours(),
-                        duration.num_minutes() % 60,
-                        duration.num_seconds() % 60
-                    )?;
-                } else {
-                    write!(
-                        f,
-                        "{}m {}s",
-                        duration.num_minutes(),
-                        duration.num_seconds() % 60
-                    )?;
-                }
-            }
-            None => (),
+                Ok(chrono::Duration::from_std(duration_std)?)
+            },
+            None => Err("No start time")?,
+        }
+    }
+}
+
+impl fmt::Display for Time {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+        let duration = match self.duration() {
+            Ok(d) => d,
+            Err(_) => chrono::Duration::zero(),
         };
+        if duration.num_hours() > 0 {
+            write!(
+                f,
+                "{}h {}m {}s",
+                duration.num_hours(),
+                duration.num_minutes() % 60,
+                duration.num_seconds() % 60
+                )?;
+        } else {
+            write!(
+                f,
+                "{}m {}s",
+                duration.num_minutes(),
+                duration.num_seconds() % 60
+                )?;
+        }
         Ok(())
     }
 }

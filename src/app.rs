@@ -2,14 +2,7 @@ use crate::time::{Class, Time, CLASS_NUM};
 use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json;
-use std::{
-    collections::HashMap,
-    env,
-    error::Error,
-    fs,
-    io,
-    path::Path,
-};
+use std::{collections::HashMap, env, error::Error, fs, io, path::Path};
 
 pub fn run(args: Cli) -> Result<(), Box<dyn Error>> {
     let pathstr = env::var("HOME")? + "/.local/share/asstime/times.json";
@@ -27,7 +20,9 @@ pub fn run(args: Cli) -> Result<(), Box<dyn Error>> {
         Some(Commands::Cancel { class }) => {
             app.cancel_timer(class.into())?;
         }
-        Some(Commands::Show(args)) => app.show(args),
+        Some(Commands::Show(args)) => {
+            app.show(args)?;
+        }
         None => {
             if args.list_classes {
                 app.list_class();
@@ -103,13 +98,13 @@ impl<'a> App<'a> {
         Ok(())
     }
 
-    fn show(&self, args: ShowArgs) {
+    fn show(&self, args: ShowArgs) -> Result<(), Box<dyn Error>> {
         match &args.class {
             Some(c) => {
-                self.show_timer(c.to_string().into(), &args);
+                Ok(self.show_timer(c.to_string().into(), &args))
             }
             None => {
-                self.show_timers(args.active_only);
+                self.show_timers(args)
             }
         }
     }
@@ -145,14 +140,14 @@ impl<'a> App<'a> {
         }
     }
 
-    fn show_timers(&self, active_only: bool) {
+    fn show_timers(&self, args: ShowArgs) -> Result<(), Box<dyn Error>> {
         let mut shown_classes: Vec<Class> = Vec::new();
         for (class, time) in &self.data.active_times {
             println!("{}: {} (active)", class, time);
             shown_classes.push(*class);
         }
-        if active_only {
-            return;
+        if args.active_only {
+            return Ok(());
         }
         for time in self.data.times.iter().rev() {
             if shown_classes.len() >= CLASS_NUM {
@@ -163,6 +158,10 @@ impl<'a> App<'a> {
                 shown_classes.push(time.class);
             }
         }
+        if args.sum {
+            self.sum()?;
+        }
+        Ok(())
     }
 
     fn create_path_if_not_exists(&self) -> io::Result<()> {
@@ -207,6 +206,40 @@ impl<'a> App<'a> {
         ] {
             println!("{}", class);
         }
+    }
+
+    fn sum(&self) -> Result<(), Box<dyn Error>> {
+        let mut used_classes: Vec<Class> = Vec::new();
+        let mut duration = chrono::Duration::zero();
+
+        for (class, time) in &self.data.active_times {
+            used_classes.push(*class);
+            duration = duration + time.duration()?;
+        }
+        for time in self.data.times.iter().rev() {
+            if used_classes.len() >= CLASS_NUM {
+                break;
+            }
+            if !used_classes.contains(&time.class) {
+                used_classes.push(time.class);
+                duration = duration + time.duration()?;
+            }
+        }
+        if duration.num_hours() > 0 {
+            println!(
+                "Total: {}h {}m {}s",
+                duration.num_hours(),
+                duration.num_minutes() % 60,
+                duration.num_seconds() % 60
+                );
+        } else {
+            println!(
+                "Total: {}m {}s",
+                duration.num_minutes(),
+                duration.num_seconds() % 60
+                );
+        }
+        Ok(())
     }
 }
 
@@ -259,4 +292,7 @@ struct ShowArgs {
     /// Show N previous classes when class specified
     #[arg(short, long, value_name = "N")]
     previous: Option<i32>,
+    /// Sum most recent assignment time of every class
+    #[arg(short, long)]
+    sum: bool,
 }
