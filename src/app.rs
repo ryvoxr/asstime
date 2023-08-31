@@ -13,12 +13,27 @@ pub fn run(args: Cli) -> Result<(), Box<dyn Error>> {
     match args.command {
         Some(Commands::Start { class }) => {
             app.start_timer(class.into())?;
+            if !args.no_show {
+                app.show(ShowArgs::default())?;
+            }
         }
         Some(Commands::Stop { class }) => {
             app.end_timer(class.into())?;
+            if !args.no_show {
+                app.show(ShowArgs::default())?;
+            }
         }
         Some(Commands::Cancel { class }) => {
             app.cancel_timer(class.into())?;
+            if !args.no_show {
+                app.show(ShowArgs::default())?;
+            }
+        }
+        Some(Commands::Zero { class }) => {
+            app.zero_timer(class.into())?;
+            if !args.no_show {
+                app.show(ShowArgs::default())?;
+            }
         }
         Some(Commands::Show(args)) => {
             app.show(args)?;
@@ -95,6 +110,18 @@ impl<'a> App<'a> {
             }
         }
         println!("Timer canceled for {}", class);
+        Ok(())
+    }
+
+    fn zero_timer(&mut self, class: Class) -> Result<(), Box<dyn Error>> {
+        if self.data.active_times.contains_key(&class) {
+            self.cancel_timer(class)?;
+        }
+        let mut time = Time::new(class);
+        time.set_start();
+        time.set_end();
+        self.data.times.push(time);
+        println!("Timer zeroed for {}", class);
         Ok(())
     }
 
@@ -273,6 +300,9 @@ pub struct Cli {
     /// List valid classes
     #[arg(long)]
     list_classes: bool,
+    /// Don't call 'show' command after other command
+    #[arg(short, long)]
+    no_show: bool,
 }
 
 #[derive(Subcommand)]
@@ -283,6 +313,8 @@ enum Commands {
     Stop { class: String },
     /// Cancel an assignment timer
     Cancel { class: String },
+    /// Zero out an assignment timer
+    Zero { class: String },
     /// Show assignment times
     Show(ShowArgs),
 }
@@ -301,4 +333,15 @@ struct ShowArgs {
     /// Sum most recent assignment time of every class
     #[arg(short, long)]
     sum: bool,
+}
+
+impl ShowArgs {
+    fn default() -> ShowArgs {
+        ShowArgs {
+            class: None,
+            active_only: false,
+            previous: None,
+            sum: false,
+        }
+    }
 }
